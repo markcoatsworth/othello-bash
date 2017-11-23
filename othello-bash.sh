@@ -5,56 +5,57 @@ declare -i board=(
     0 0 0 0 0 0 0 0 
     0 0 0 0 0 0 0 0 
     0 0 0 0 0 0 0 0 
-    0 0 0 0 0 0 0 0 
-    0 0 0 0 0 0 0 0 
+    0 0 0 1 2 0 0 0 
+    0 0 0 2 1 0 0 0 
     0 0 0 0 0 0 0 0 
     0 0 0 0 0 0 0 0 
     0 0 0 0 0 0 0 0
 )
 
+# [main]
 function main() {
 
-    # Initialize board with default XOXO pattern in the centre
-    board[28]=1
-    board[29]=2
-    board[36]=2
-    board[37]=1
+    # Show the current state of the board
+    board_show
 
     # Main loop
     game_state="player_1_turn"  
     while [ $game_state != "game_over" ]; do
-        
-        # Show the current state of the board
-        board_show
 
         # Player 1 (human) turn
         if [ $game_state = "player_1_turn" ]; then
             printf "Player 1 turn. Choose a row and column for your next move.\n"
-            printf "Row: "
+            printf "Row (1-8): "
             read player1_row
-            printf "Col: "
+            printf "Col (1-8): "
             read player1_col
-            printf "Input: row=$player1_row, col=$player1_col\n"
+            
+            # Try the move. If it's invalid, board_set will return non-zero,
+            # in which case the player just tries again.
             board_set player1_row player1_col 1
-            game_state="player_2_turn"
+            if [ $? != 0 ]; then
+                printf "\n*** Invalid move! Try again. ***\n\n"
+            else
+                board_show
+                game_state="player_2_turn"
+            fi
 
         # Player 2 (computer) turn
         elif [ $game_state = "player_2_turn" ]; then
             printf "Player 2 turn. Computer does some magic...\n"
-            get_test=$(board_get 4 5)
-            printf "Value at position 4,5: $get_test"
+            board_show
             game_state="player_1_turn"
-        
         fi
     done
 }
 
 # [board_show]
+# @return: Nothing. Just output the board to stdout.
 function board_show {
     printf "\n"
-    for i in `seq 1 64`; do
+    for i in `seq 0 63`; do
         printf "%d " ${board[$i]}
-        if (( $i % 8 == 0 )); then
+        if (( ($i + 1) % 8 == 0 )); then
             printf "\n"
         fi
     done
@@ -64,28 +65,64 @@ function board_show {
 # [board_get]
 # @param $1: The row position of the board space to return (1 to 8)
 # @param $2: The col position of the board space to return (1 to 8)
-# @return: Returns 0, 1 or 2. Add error checks! 
+# @return: "0", "1" or "2" if success, "error" if error. 
 function board_get {
-    declare -i row_pos=$1
-    declare -i col_pos=$2
-    array_pos=$(( ((row_pos-1) * 8) + (col_pos) ))
-    echo "[board_get] row_pos=$row_pos, col_pos=$col_pos, array_pos=$array_pos"
-
-    # Return
-    echo ${board[array_pos]}
+    row_pos=$1
+    col_pos=$2
+    
+    # Make sure the location requests is a valid position on the board
+    return_val="error"  # Assume error until proven otherwise
+    if (( row_pos >= 1 && row_pos <= 8 && col_pos >= 1 && col_pos <= 8 )); then
+        array_pos=$(( ((row_pos-1) * 8) + (col_pos - 1) ))
+        return_val=${board[$array_pos]}
+    fi
+    
+    # Return as expression
+    echo $return_val
 }
 
 # [board_set]
 # @param $1: The row position of the board space to set (1 to 8)
 # @param $2: The col position of the board space to set (1 to 8)
 # @param $3: The value to set
-# @return: Return 0 if successful, 1 if error. Add error checks!
+# @return: 0 if success, 1 if error.
 function board_set {
-    declare -i row_pos=$1
-    declare -i col_pos=$2
-    declare -i value=$3
-    array_pos=$(( ((row_pos-1) * 8) + (col_pos) ))
-    board[$array_pos]=$value
+    row_pos=$1
+    col_pos=$2
+    value=$3
+    return_val=1 # Assume error until proven otherwise
+    
+    # Determine if the move is valid. There are a few things we need to look at.
+    # First, make sure the requested position is valid and available. We can use
+    # board_get to verify this.
+    if [ $(board_get $row_pos $col_pos) -eq "0" ]; then
+        # Next, make sure the requested position is a legal move. We can use
+        # board_is_legal_move to verify this.
+        board_is_legal_move $row_pos $col_pos $value
+        if [ $? = 0 ]; then
+            array_pos=$(( ((row_pos-1) * 8) + (col_pos - 1) ))
+            board[$array_pos]=$value
+            return_val=0
+        fi
+    fi
+
+    # Return as value
+    return $return_val
+}
+
+# [board_is_legal_move]
+# @param $1: The row position of the board space to verify (1 to 8)
+# @param $2: The col position of the board space to verify (1 to 8)
+# @param $3: The value to verify is legal.
+# @return: 0 if the move is legal, 1 if not.
+function board_is_legal_move {
+    row_pos=$1
+    col_pos=$2
+    value=$3
+    return_val=0
+
+    # Return as value
+    return $return_val
 }
 
 main
