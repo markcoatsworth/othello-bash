@@ -20,13 +20,19 @@ player2_available_moves=( 19 26 37 44 )
 # @param $1: Process type. Can be "process", "thread" (default "process")
 function main() {
 
-    # Command line arguments
+    # Command line arguments. Only process the first one here to determine
+    # if this is a process or a process thread.
     process_type="process"
-    if [ ! -z $1 ]; then
-        process_type=$1
+    if [ ! -z $1 ]; then process_type=$1; fi
+
+    # If this is a process thread, call the handler function, which will deal
+    # with the rest of the command line arguments. Once that is complete, exit.
+    if [ "$process_type" = "thread" ]; then
+        thread $@
+        exit
     fi
 
-    # Main loop
+    # Main process loop
     game_state="player1_turn"
     while [ $game_state != "game_over" ]; do
 
@@ -67,13 +73,13 @@ function main() {
         elif [ $game_state = "player2_turn" ]; then
             printf "Player 2 turn. Computer is thinking...\n"
 
-            # Pick a move at random. We'll make this smarter later.
-            player2_random_move=$(( RANDOM % ${#player2_available_moves[@]} ))
-            player2_move=${player2_available_moves[$player2_random_move]}
-            player2_row=$(( ( player2_move / 8 ) + 1 ))
-            player2_col=$(( ( player2_move % 8 ) + 1 ))
-            board_play_move $player2_row $player2_col 2
-            printf "Player 2 played at row $player2_row, col $player2_col.\n"
+            # Pick the best move determined by our evaluation function.
+            evaluate_available_moves 2
+            player2_best_move=$?
+            player2_move_row=$(( ( player2_best_move / 8 ) + 1 ))
+            player2_move_col=$(( ( player2_best_move % 8 ) + 1 ))
+            board_play_move $player2_move_row $player2_move_col 2
+            printf "Player 2 played at row $player2_move_row, col $player2_move_col.\n"
 
             # Evaluate player 1 available moves. If they have none, the game 
             # is over. Otherwise, player 1 turn.
@@ -99,6 +105,48 @@ function main() {
         printf "Player 2 wins!\n"
     fi
 }
+
+# [thread]
+# @description: Main control loop for "thread" processes, which are not
+#   technically threads but are being used in a similar way.
+
+function thread {
+    local player_num=$2
+    local suggested_move=$3
+    local results_filename=$4
+    local level_num=$5
+    local move_result
+
+    # Set the state of the game (board, player1_pieces, player2_pieces) based on
+    # remaining command-line arguments
+    player1_pieces=( )
+    player2_pieces=( )
+    shift 5
+    for index in `seq 0 63`; do
+        board[$index]=$1
+        if [ "$1" = "1" ]; then player1_pieces+=($index); fi
+        if [ "$1" = "2" ]; then player2_pieces+=($index); fi
+        shift
+    done
+
+    # Play the suggested move
+    move_row=$(( ( suggested_move / 8 ) + 1 ))
+    move_col=$(( ( suggested_move % 8 ) + 1 ))
+    board_play_move $move_row $move_col $player_num
+    
+    # Determine the result of the move, which is the difference in number of
+    # pieces between the player who just player ($player_num) and the opponent
+    if [ "$player_num" = "1" ]; then
+        move_diff=$(( ${#player1_pieces[@]} - ${#player2_pieces[@]} ))
+    elif [ "$player_num" = "2" ]; then
+        move_diff=$(( ${#player2_pieces[@]} - ${#player1_pieces[@]} ))
+    fi
+    #printf "[thread-$$] after move, player1_pieces=(${player1_pieces[*]}), player2_pieces=(${player2_pieces[*]}), move_diff=$move_diff\n"
+
+    # Output results
+    echo $suggested_move=$move_diff >> $results_filename
+}
+
 
 # [board_show]
 # @return: Nothing. Just output the board to stdout.
@@ -242,7 +290,7 @@ function board_play_move {
     # Iterate over adjacent positions to the new move
     # BUG: On a diagonal with pieces ordered 0 1 2 1 2, playing a 2 in the open
     #   position flipped all the 1s on the diagonal, not just the one bounded
-    #   by the first 2. Is that correct?
+    #   by the first 2.
     for row in `seq $(( row_pos-1 )) $(( row_pos+1 ))`; do
         for col in `seq $(( col_pos-1 )) $(( col_pos+1 ))`; do
 
@@ -315,10 +363,8 @@ function board_is_legal_move {
                 # 1. Hit a 0 (empty): move is not valid.
                 # 2. Hit the edge of the board: move is not valid
                 # 3. Hit one of our own pieces: move is valid
-
                 row_diff=$(( row - row_pos ))
                 col_diff=$(( col - col_pos ))
-                
                 scan_row=$(( row + row_diff ))
                 scan_col=$(( col + col_diff ))
 
@@ -392,6 +438,55 @@ function set_available_moves {
     fi
 }
 
+# [evaluate_available_moves]
+# @param $1: Player # to evaluate available moves for (1 or 2)
+# @return: The array element index that represents the best possible move.
+function evaluate_available_moves {
+    local player_num=$1
+    local level_num=2
+    local available_moves=( )
+    local results_filename="available_moves_$$"
+
+    # Copy the appropriate list of local moves into a local array
+    if [ "$player_num" = "1" ]; then
+        available_moves=("${player1_available_moves[@]}")
+    elif [ "$player_num" = "2" ]; then
+        available_moves=("${player2_available_moves[@]}")
+    fi
+
+    # Evaluate each of the available moves using a thread process
+    for move in ${available_moves[@]}; do
+        ./othello-bash.sh "thread" $player_num $move $results_filename $level_num ${board[*]}
+    done
+
+    # Wait for all the thread processes to finish
+    #wait
+
+    # Now iterate over the contents of the results file. Determine the value
+    # of the best move, and the corresponding position
+    local best_move=${available_moves[0]}
+    local best_move_value=$(( 0 - 64 ))
+    for result in `cat $results_filename`; do
+        #printf "[evaluate_available_moves-$$] result=$result\n"
+        while IFS='=' read -ra result_tokens; do
+            local this_move=${result_tokens[0]}
+            local this_move_value=${result_tokens[1]}
+            if (( this_move_value > best_move_value )); then
+                best_move=$this_move
+                best_move_value=$this_move_value
+            fi
+        done <<< "$result"
+    done
+
+    # Delete the results file
+    rm $results_filename
+
+    # Return!
+    #printf "[evaluate_available_moves-$$] best_move=$best_move, best_move_value=$best_move_value\n"
+    return $best_move
+
+}
+
 # [array_contains]
 # @param $1: Value to search for
 # @param $2: Array to look in
@@ -419,40 +514,27 @@ function array_remove {
     # elements. This is a long-winded hack, can probably find a better way
     # to do this.
     if [ "$array_name" = "player1_pieces" ]; then
-        #printf "[array_remove] removing match=$match from player1_pieces=( ${player1_pieces[*]} )\n"
         for array_val in ${player1_pieces[@]}; do
-            #printf "[array_remove] comparing match=$match to $array_val=${array_val}\n"
             if (( array_val != match )); then
                 new_array+=($array_val)
-                #printf "[array_remove] removed match=$match, new_array=( ${new_array[*]} )\n"
             fi
         done
         player1_pieces=( )
-        #printf "[array_remove] done removing, player1_pieces=( ${player1_pieces[*]} )\n"
-        for i in ${new_array[@]}; do 
+       for i in ${new_array[@]}; do 
             player1_pieces+=($i) 
         done;
     elif [ "$array_name" = "player2_pieces" ]; then
-        #printf "[array_remove] removing match=$match from player2_pieces=( ${player2_pieces[*]} )\n"
         for array_val in ${player2_pieces[@]}; do 
             if (( array_val != match )); then
                 new_array+=($array_val)
-                #printf "[array_remove] removed match=$match, new_array=( ${new_array[*]} )\n"
             fi
         done
         player2_pieces=( )
-        #printf "[array_remove] done removing, player2_pieces=( ${player2_pieces[*]} )\n"
         for i in ${new_array[@]}; do 
             player2_pieces+=($i) 
         done
-    elif [ "$array_name" = "player1_available_moves" ]; then
-        printf "[array_remove] removing from player1_available_moves=${player1_available_moves[*]}\n"
-    elif [ "$array_name" = "player2_available_moves" ]; then
-        printf "[array_remove] removing from player2_available_moves=${player2_available_moves[*]}\n"
     fi
-
-
 }
 
 # Start!
-main
+main $@
