@@ -34,6 +34,7 @@ function main() {
 
     # Main process loop
     game_state="player1_turn"
+    level_num=2
     while [ $game_state != "game_over" ]; do
 
         # Show the current state of the board
@@ -74,7 +75,7 @@ function main() {
             printf "Player 2 turn. Computer is thinking...\n"
 
             # Pick the best move determined by our evaluation function.
-            evaluate_available_moves 2
+            evaluate_available_moves 2 $level_num
             player2_best_move=$?
             player2_move_row=$(( ( player2_best_move / 8 ) + 1 ))
             player2_move_col=$(( ( player2_best_move % 8 ) + 1 ))
@@ -117,6 +118,8 @@ function thread {
     local level_num=$5
     local move_result
 
+    printf "[thread_$$] player_num=$player_num, suggested_move=$suggested_move, level_num=$level_num\n"
+
     # Set the state of the game (board, player1_pieces, player2_pieces) based on
     # remaining command-line arguments
     player1_pieces=( )
@@ -134,17 +137,33 @@ function thread {
     move_col=$(( ( suggested_move % 8 ) + 1 ))
     board_play_move $move_row $move_col $player_num
     
+    # At this point, if we are on level 0, then return the difference between
+    # ${#player1_pieces[@]} and ${#player2_pieces[@]}.
+
+    # If we are on level >= 1, then evaluate further moves down the decision
+    # tree.
+
     # Determine the result of the move, which is the difference in number of
     # pieces between the player who just player ($player_num) and the opponent
-    if [ "$player_num" = "1" ]; then
-        move_diff=$(( ${#player1_pieces[@]} - ${#player2_pieces[@]} ))
-    elif [ "$player_num" = "2" ]; then
-        move_diff=$(( ${#player2_pieces[@]} - ${#player1_pieces[@]} ))
+    if (( level_num >= 1 )); then
+        if [ "$player_num" = "1" ]; then
+            evaluate_available_moves 2 $level_num
+        elif [ "$player_num" = "2" ]; then
+            evaluate_available_moves 1 $level_num
+        fi
+        move_result=$?
+        printf "[thread_$$] for level=$level_num, move_result=$move_result\n"
+    else
+        # Although we use the player_num variable to track which player we're
+        # currently evaluating moves for, we are ALWAYS trying to get the best 
+        # score for player 2 (computer). So the final result will always 
+        # represent the number of player 2 pieces more than player 1 pieces.
+        move_result=$(( ${#player2_pieces[@]} - ${#player1_pieces[@]} ))
     fi
-    #printf "[thread-$$] after move, player1_pieces=(${player1_pieces[*]}), player2_pieces=(${player2_pieces[*]}), move_diff=$move_diff\n"
+    #printf "[thread_$$] after move, player1_pieces=(${player1_pieces[*]}), player2_pieces=(${player2_pieces[*]}), move_diff=$move_diff\n"
 
     # Output results
-    echo $suggested_move=$move_diff >> $results_filename
+    echo $suggested_move=$move_result >> $results_filename
 }
 
 
@@ -288,8 +307,8 @@ function board_play_move {
 
     # Now we need to flip opponent pieces that were just surrounded 
     # Iterate over adjacent positions to the new move
-    # BUG: On a diagonal with pieces ordered 0 1 2 1 2, playing a 2 in the open
-    #   position flipped all the 1s on the diagonal, not just the one bounded
+    # BUG: On a range with pieces ordered 0 1 2 1 2, playing a 2 in the open
+    #   position flips all the 1s along the range, not just the one bounded
     #   by the first 2.
     for row in `seq $(( row_pos-1 )) $(( row_pos+1 ))`; do
         for col in `seq $(( col_pos-1 )) $(( col_pos+1 ))`; do
@@ -443,9 +462,10 @@ function set_available_moves {
 # @return: The array element index that represents the best possible move.
 function evaluate_available_moves {
     local player_num=$1
-    local level_num=2
+    local level_num=$2
     local available_moves=( )
     local results_filename="available_moves_$$"
+    printf "[evaluate_available_moves_$$] called! player_num=$player_num, level_num=$level_num\n"
 
     # Copy the appropriate list of local moves into a local array
     if [ "$player_num" = "1" ]; then
@@ -456,18 +476,18 @@ function evaluate_available_moves {
 
     # Evaluate each of the available moves using a thread process
     for move in ${available_moves[@]}; do
-        ./othello-bash.sh "thread" $player_num $move $results_filename $level_num ${board[*]}
+        ./othello-bash.sh "thread" $player_num $move $results_filename $(( level_num - 1 )) ${board[*]} &
     done
 
     # Wait for all the thread processes to finish
-    #wait
+    wait
 
     # Now iterate over the contents of the results file. Determine the value
     # of the best move, and the corresponding position
     local best_move=${available_moves[0]}
-    local best_move_value=$(( 0 - 64 ))
+    local best_move_value=-64
     for result in `cat $results_filename`; do
-        #printf "[evaluate_available_moves-$$] result=$result\n"
+        printf "[evaluate_available_moves_$$] level_num=$level_num, result=$result, best_move=$best_move, best_move_value=$best_move_value\n"
         while IFS='=' read -ra result_tokens; do
             local this_move=${result_tokens[0]}
             local this_move_value=${result_tokens[1]}
@@ -482,9 +502,8 @@ function evaluate_available_moves {
     rm $results_filename
 
     # Return!
-    #printf "[evaluate_available_moves-$$] best_move=$best_move, best_move_value=$best_move_value\n"
+    printf "[evaluate_available_moves_$$] best_move=$best_move, best_move_value=$best_move_value\n"
     return $best_move
-
 }
 
 # [array_contains]
