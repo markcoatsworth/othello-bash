@@ -13,8 +13,8 @@ board=(
 )
 player1_pieces=( 27 36 )
 player2_pieces=( 28 35 )
-player1_available_moves=( 20 29 34 43 )
-player2_available_moves=( 19 26 37 44 )
+player1_available_moves=( ) # set using set_available_moves
+player2_available_moves=( ) # set using set_available_moves
 
 # [main]
 # @param $1: Process type. Can be "process", "thread" (default "process")
@@ -33,6 +33,8 @@ function main() {
     fi
 
     # Setup the initial game state
+    set_available_moves 1
+    set_available_moves 2
     game_state="player1_turn"
     level_num=3
 
@@ -70,7 +72,7 @@ function main() {
                     if [ "${#player1_available_moves[@]}" = "0" ]; then
                         game_state="game_over"
                     else
-                        : # Do nothing, game not over, still player 1 turn
+                        printf "\n*** Player 2 has no more available moves! ***\n"
                     fi
                 else
                     game_state="player2_turn"
@@ -81,11 +83,14 @@ function main() {
         elif [ $game_state = "player2_turn" ]; then
             printf "Player 2 turn. Computer is thinking...\n"
 
-            # Choose a move at random
+            player2_move_start_time=`date +%s`
+
+            # Strategy 1: Choose a move at random
             random_move_index=$(( RANDOM % ${#player2_available_moves} ))
             player2_move=${player2_available_moves[$random_move_index]}
 
-            # Evaluate the best move using recursive minmax to $num_level levels. 
+            # Strategy 2: Evaluate the best move using recursive minmax tree  
+            # to depth $num_level. 
             # Result is a '=' delimited string: move_pos=move_value
             
             # player2_minmax_move_result=$(evaluate_available_moves 2 $level_num)
@@ -93,11 +98,16 @@ function main() {
             # IFS='=' read -a result_tokens <<< "$player2_minmax_move_result"
             # player2_move=$(( ${result_tokens[0]} ))
 
-            # Play the best move determined by our evaluation function
+            # Play the best move determined by our chosen strategy
             player2_move_row=$(( ( player2_move / 8 ) + 1 ))
             player2_move_col=$(( ( player2_move % 8 ) + 1 ))
             board_play_move $player2_move_row $player2_move_col 2
             printf "Player 2 played at row $player2_move_row, col $player2_move_col (array pos $player2_move).\n"
+
+            # Show some timing information
+            player2_move_end_time=`date +%s`
+            player2_move_time=$(( player2_move_end_time - player2_move_start_time ))
+            printf "Player 2 decision took $player2_move_time seconds.\n"
 
             # Move was successful. Evaluate player 1 available moves. If
             # they have none, check if game is over. Otherwise, player 2 turn.
@@ -107,7 +117,7 @@ function main() {
                 if [ "${#player2_available_moves[@]}" = "0" ]; then
                     game_state="game_over"
                 else
-                    : # Do nothing, game not over, still player 1 turn
+                    printf "\n*** Player 1 has no more available moves! ***\n"
                 fi
             else
                 game_state="player1_turn"
@@ -117,15 +127,15 @@ function main() {
     done
 
     # Game over! Figure out who won.
-    printf "Game over!\n"
+    printf "\nGame over!\n\n"
     player1_score=${#player1_pieces[@]}
     player2_score=${#player2_pieces[@]}
     printf "Player 1 has $player1_score pieces\n"
     printf "Player 2 has $player2_score pieces\n"
     if (( player1_score > player2_score )); then
-        printf "Player 1 wins!\n"
+        printf "\nPlayer 1 wins!\n"
     else
-        printf "Player 2 wins!\n"
+        printf "\nPlayer 2 wins!\n"
     fi
 }
 
@@ -244,9 +254,7 @@ function board_set_pos {
     if (( new_pos_value == 1 )); then
         array_contains $array_pos "${player1_pieces[@]}"
         if [ "$?" = "1" ]; then
-            #printf "[board_set_pos] adding $array_pos to player 1\n"
             player1_pieces+=($array_pos)
-            #printf "[board_set_pos] removing $array_pos from player 2, old_pos_value=$old_pos_value\n"
             if [ "$old_pos_value" = "2" ]; then
                 array_remove $array_pos "player2_pieces"
             fi
@@ -254,9 +262,7 @@ function board_set_pos {
     elif (( new_pos_value == 2 )); then
         array_contains $array_pos "${player2_pieces[@]}"
         if [ "$?" = "1" ]; then
-            #printf "[board_set_pos] adding $array_pos to player 2\n"
             player2_pieces+=($array_pos)
-            #printf "[board_set_pos] removing $array_pos from player 1, old_pos_value=$old_pos_value\n"
             if [ "$old_pos_value" = "1" ]; then
                 array_remove $array_pos "player1_pieces"
             fi
@@ -398,11 +404,11 @@ function board_is_legal_move {
             this_pos_value=$(board_get_pos $row $col)
 
             # Check if this position is adjacent to an opponent. If so, their
-            # position values (1+2) will add up to 3.
+            # position values (1, 2) will add up to 3.
             if (( value + this_pos_value == 3 )); then
 
                 # Now traverse the matrix in the direction of the opponent
-                # piece. Continue until we either:
+                # piece we just found. Continue until:
                 # 1. Hit a 0 (empty): move is not valid.
                 # 2. Hit the edge of the board: move is not valid
                 # 3. Hit one of our own pieces: move is valid
@@ -411,7 +417,6 @@ function board_is_legal_move {
                 scan_row=$(( row + row_diff ))
                 scan_col=$(( col + col_diff ))
 
-                # TODO: The bounds on this loop go over by 1, fix this
                 while (( scan_row >= 1 && scan_row <= 8 && scan_col >= 1 && scan_col <= 8 )); do
                     scan_val=$(board_get_pos $scan_row $scan_col)
                     if [ "$scan_val" -eq "0" ]; then
@@ -453,18 +458,14 @@ function set_available_moves {
     for pos in "${opponent_positions[@]}"; do
         move_row=$(( ( pos / 8 ) + 1 ))
         move_col=$(( ( pos % 8 ) + 1 ))
-        #printf "[set_available_moves] pos=$pos maps to row=$move_row, col=$move_col\n"
         for adj_row in `seq $(( move_row-1 )) $(( move_row+1 ))`; do
             for adj_col in `seq $(( move_col-1 )) $(( move_col+1 ))`; do
-                #printf "[set_available_moves] adj_row=$adj_row, adj_col=$adj_col, board_get_pos="
-                #printf "$(board_get_pos $adj_row $adj_col)"
-                #printf "\n"
                 if [ $(board_get_pos $adj_row $adj_col) = "0" ]; then
                     board_is_legal_move $adj_row $adj_col $player_num
                     is_legal=$?
-                    #printf "[set_available_moves] for row=$adj_row, col=$adj_col, player_num=$player_num: is_legal=$is_legal\n"
+                    # If this is a legal move, make sure it's not already in the
+                    # available moves array, then add it.
                     if (( is_legal == 0 )); then
-                        #printf "[set_available_moves] move row=$adj_row, col=$adj_col is legal!\n"
                         available_move_pos=$(( ((adj_row-1) * 8) + (adj_col - 1) ))
                         array_contains $available_move_pos "${available_moves[@]}"
                         if [ "$?" == "1" ]; then
@@ -556,7 +557,6 @@ function array_remove {
     local match=$1
     local array_name=$2
     local new_array=( )
-    #printf "[array_remove] match=$match, array_name=$array_name\n"
 
     # Bash sucks at removing elements from arrays + re-indexing the other
     # elements. This is a long-winded hack, can probably find a better way
@@ -585,7 +585,8 @@ function array_remove {
 }
 
 # [dprintf]
-# @description: Debug printf to stderr
+# @description: Debug printf to stderr. Used to debug functions that return 
+#   values by stdout.
 # @param $1: String to output to stderr
 # @param $2: Any arguments that need to be converted
 # @return: Nothing, assume success.
