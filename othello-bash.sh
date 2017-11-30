@@ -32,9 +32,11 @@ function main() {
         exit
     fi
 
-    # Main process loop
+    # Setup the initial game state
     game_state="player1_turn"
-    level_num=2
+    level_num=3
+
+    # Main process loop
     while [ $game_state != "game_over" ]; do
 
         # Show the current state of the board
@@ -61,10 +63,15 @@ function main() {
                 printf "\n*** Invalid move! Try again. ***\n\n"
             else
                 # Move was successful. Evaluate player 2 available moves. If
-                # they have none, the game is over. Otherwise, player 2 turn.
+                # they have none, check if game is over. Otherwise, player 2 turn.
                 set_available_moves 2
                 if [ "${#player2_available_moves[@]}" = "0" ]; then
-                    game_state="game_over"
+                    set_available_moves 1
+                    if [ "${#player1_available_moves[@]}" = "0" ]; then
+                        game_state="game_over"
+                    else
+                        : # Do nothing, game not over, still player 1 turn
+                    fi
                 else
                     game_state="player2_turn"
                 fi
@@ -74,19 +81,34 @@ function main() {
         elif [ $game_state = "player2_turn" ]; then
             printf "Player 2 turn. Computer is thinking...\n"
 
-            # Pick the best move determined by our evaluation function.
-            evaluate_available_moves 2 $level_num
-            player2_best_move=$?
-            player2_move_row=$(( ( player2_best_move / 8 ) + 1 ))
-            player2_move_col=$(( ( player2_best_move % 8 ) + 1 ))
-            board_play_move $player2_move_row $player2_move_col 2
-            printf "Player 2 played at row $player2_move_row, col $player2_move_col.\n"
+            # Choose a move at random
+            random_move_index=$(( RANDOM % ${#player2_available_moves} ))
+            player2_move=${player2_available_moves[$random_move_index]}
 
-            # Evaluate player 1 available moves. If they have none, the game 
-            # is over. Otherwise, player 1 turn.
+            # Evaluate the best move using recursive minmax to $num_level levels. 
+            # Result is a '=' delimited string: move_pos=move_value
+            
+            # player2_minmax_move_result=$(evaluate_available_moves 2 $level_num)
+            # printf "Evaluating best move returned: $player2_minmax_move_result\n"
+            # IFS='=' read -a result_tokens <<< "$player2_minmax_move_result"
+            # player2_move=$(( ${result_tokens[0]} ))
+
+            # Play the best move determined by our evaluation function
+            player2_move_row=$(( ( player2_move / 8 ) + 1 ))
+            player2_move_col=$(( ( player2_move % 8 ) + 1 ))
+            board_play_move $player2_move_row $player2_move_col 2
+            printf "Player 2 played at row $player2_move_row, col $player2_move_col (array pos $player2_move).\n"
+
+            # Move was successful. Evaluate player 1 available moves. If
+            # they have none, check if game is over. Otherwise, player 2 turn.
             set_available_moves 1
             if [ "${#player1_available_moves[@]}" = "0" ]; then
-                game_state="game_over"
+                set_available_moves 2
+                if [ "${#player2_available_moves[@]}" = "0" ]; then
+                    game_state="game_over"
+                else
+                    : # Do nothing, game not over, still player 1 turn
+                fi
             else
                 game_state="player1_turn"
             fi
@@ -109,16 +131,23 @@ function main() {
 
 # [thread]
 # @description: Main control loop for "thread" processes, which are not
-#   technically threads but are being used in a similar way.
-
+#   technically threads but are being used in a similar way. Runs a minmax
+#   search by calling evaluate_available_moves, which recursively calls up more
+#   "thread" subprocesses.
 function thread {
     local player_num=$2
     local suggested_move=$3
     local results_filename=$4
     local level_num=$5
     local move_result
+    local opponent_num
+    
+    # Determine some other useful variables
+    if [ "$player_num" = "1" ]; then opponent_num=2; else opponent_num=1; fi
+    suggested_move_row=$(( ( suggested_move / 8 ) + 1 ))
+    suggested_move_col=$(( ( suggested_move % 8 ) + 1 ))
 
-    printf "[thread_$$] player_num=$player_num, suggested_move=$suggested_move, level_num=$level_num\n"
+    dprintf "[thread_$$] player_num=$player_num, opponent_num=$opponent_num, suggested_move=$suggested_move ($suggested_move_row, $suggested_move_col), level_num=$level_num\n"
 
     # Set the state of the game (board, player1_pieces, player2_pieces) based on
     # remaining command-line arguments
@@ -133,9 +162,7 @@ function thread {
     done
 
     # Play the suggested move
-    move_row=$(( ( suggested_move / 8 ) + 1 ))
-    move_col=$(( ( suggested_move % 8 ) + 1 ))
-    board_play_move $move_row $move_col $player_num
+    board_play_move $suggested_move_row $suggested_move_col $player_num
     
     # At this point, if we are on level 0, then return the difference between
     # ${#player1_pieces[@]} and ${#player2_pieces[@]}.
@@ -146,13 +173,10 @@ function thread {
     # Determine the result of the move, which is the difference in number of
     # pieces between the player who just player ($player_num) and the opponent
     if (( level_num >= 1 )); then
-        if [ "$player_num" = "1" ]; then
-            evaluate_available_moves 2 $level_num
-        elif [ "$player_num" = "2" ]; then
-            evaluate_available_moves 1 $level_num
-        fi
-        move_result=$?
-        printf "[thread_$$] for level=$level_num, move_result=$move_result\n"
+        set_available_moves $opponent_num
+        best_move_result=$(evaluate_available_moves $opponent_num $level_num)
+        IFS='=' read -a result_tokens <<< "$best_move_result"
+        move_result=$(( ${result_tokens[1]} ))
     else
         # Although we use the player_num variable to track which player we're
         # currently evaluating moves for, we are ALWAYS trying to get the best 
@@ -163,6 +187,7 @@ function thread {
     #printf "[thread_$$] after move, player1_pieces=(${player1_pieces[*]}), player2_pieces=(${player2_pieces[*]}), move_diff=$move_diff\n"
 
     # Output results
+    dprintf "[thread_$$] for suggested_move=$suggested_move ($suggested_move_row, $suggested_move_col) at level=$level_num, returning move_result=$move_result\n"
     echo $suggested_move=$move_result >> $results_filename
 }
 
@@ -197,6 +222,7 @@ function board_get_pos {
     fi
     
     # Return as expression
+    #dprintf "[board_get_pos] row_pos=$row_pos, col_pos=$col_pos, return_val=$return_val\n"
     echo $return_val
 }
 
@@ -213,7 +239,7 @@ function board_set_pos {
 
     array_pos=$(( ((row_pos-1) * 8) + (col_pos - 1) ))
     old_pos_value=${board[$array_pos]}
-    board[$array_pos]=$value
+    board[$array_pos]=$new_pos_value
 
     if (( new_pos_value == 1 )); then
         array_contains $array_pos "${player1_pieces[@]}"
@@ -274,42 +300,40 @@ function board_set_range {
 }
 
 # [board_play_move]
-# @description: Plays a move. Verifies the requested position if a valid move
-#   space. If it is, sets the position, then flips all opponent pieces that 
+# @description: Play a move. Verifies the requested position is a valid move
+#   space. If it is, set the position, then flip all opponent pieces that 
 #   were surrounded by the new move.
 # @param $1: Row position of the new move (1 to 8)
 # @param $2: Col position of the new move (1 to 8)
-# @param $3: Value to set.
+# @param $3: Player number, also the value to set.
 # @return: 0 if the move was played successfully, 1 if not.
 function board_play_move {
     local row_pos=$1
     local col_pos=$2
-    local value=$3
+    local player_num=$3
 
-    # Determine if the move is valid. There are a few things we need to look at.
-    # First, make sure the requested position is valid and available. We can use
-    # board_get_pos to verify this.
-    if [ $(board_get_pos $row_pos $col_pos) -eq "0" ]; then
-        # Next, make sure the requested position is a legal move. We can use
-        # board_is_legal_move to verify this.
-        board_is_legal_move $row_pos $col_pos $value
-        is_legal=$?
-        if [ "$is_legal" -eq "0" ]; then
-            # Everything is legal, set the new move!
-            board_set_pos $row_pos $col_pos $value
-         else
-            # Move was not legal, bail out here
-            return 1
-        fi
+    # Determine if the move is valid. Just check if the move is in the player's
+    # available moves array; assume all moves in there are legal and valid.
+    # Important, also assume the available moves arrays are up to date!
+    move_pos=$(( ((row_pos-1) * 8) + (col_pos - 1) ))
+    if [ "$player_num" = "1" ]; then
+        array_contains $move_pos "${player1_available_moves[@]}"
+    elif [ "$player_num" = "2" ]; then
+        array_contains $move_pos "${player2_available_moves[@]}"
+    fi
+
+    is_legal=$?
+    if [ "$is_legal" -eq "0" ]; then
+        # Everything is legal, set the new move!
+        board_set_pos $row_pos $col_pos $player_num
     else
+        # Move was not legal, bail out here
         return 1
     fi
+    
 
     # Now we need to flip opponent pieces that were just surrounded 
     # Iterate over adjacent positions to the new move
-    # BUG: On a range with pieces ordered 0 1 2 1 2, playing a 2 in the open
-    #   position flips all the 1s along the range, not just the one bounded
-    #   by the first 2.
     for row in `seq $(( row_pos-1 )) $(( row_pos+1 ))`; do
         for col in `seq $(( col_pos-1 )) $(( col_pos+1 ))`; do
 
@@ -317,28 +341,28 @@ function board_play_move {
             # board. If it's not, bash will return "0" which we don't care 
             # about.
             this_pos_value=$(board_get_pos $row $col)
-            
+
             # Check if this position is adjacent to an opponent. If so, their
             # position values (1, 2) will add up to 3.
-            if (( value + this_pos_value == 3 )); then
+            if (( player_num + this_pos_value == 3 )); then
 
                 # Now traverse the matrix in the direction of the opponent
                 # piece. Continue until we either:
                 # 1. Hit a 0 (empty), in which case the move is not valid.
                 # 2. Hit the edge of the board, in which case the move is not valid
                 # 3. Hit one of our own pieces, in which case the move is valid
+                scan_row=$row
+                scan_col=$col
                 row_diff=$(( row - row_pos ))
                 col_diff=$(( col - col_pos ))
-                scan_row=$(( row + row_diff ))
-                scan_col=$(( col + col_diff ))
 
-                # The bounds on this loop are broken, fix them
                 while (( scan_row >= 1 && scan_row <= 8 && scan_col >= 1 && scan_col <= 8 )); do
                     scan_val=$(board_get_pos $scan_row $scan_col)
                     if [ "$scan_val" -eq "0" ]; then
                         break
-                    elif [ "$scan_val" -eq "$value" ]; then
-                        board_set_range $row_pos $col_pos $scan_row $scan_col $value
+                    elif [ "$scan_val" -eq "$player_num" ]; then
+                        board_set_range $row_pos $col_pos $scan_row $scan_col $player_num
+                        break
                     fi
                     scan_row=$(( scan_row + row_diff ))
                     scan_col=$(( scan_col + col_diff ))
@@ -372,7 +396,7 @@ function board_is_legal_move {
             # board. If it's not, bash will return "0" which we don't care 
             # about.
             this_pos_value=$(board_get_pos $row $col)
-            
+
             # Check if this position is adjacent to an opponent. If so, their
             # position values (1+2) will add up to 3.
             if (( value + this_pos_value == 3 )); then
@@ -432,6 +456,9 @@ function set_available_moves {
         #printf "[set_available_moves] pos=$pos maps to row=$move_row, col=$move_col\n"
         for adj_row in `seq $(( move_row-1 )) $(( move_row+1 ))`; do
             for adj_col in `seq $(( move_col-1 )) $(( move_col+1 ))`; do
+                #printf "[set_available_moves] adj_row=$adj_row, adj_col=$adj_col, board_get_pos="
+                #printf "$(board_get_pos $adj_row $adj_col)"
+                #printf "\n"
                 if [ $(board_get_pos $adj_row $adj_col) = "0" ]; then
                     board_is_legal_move $adj_row $adj_col $player_num
                     is_legal=$?
@@ -459,13 +486,14 @@ function set_available_moves {
 
 # [evaluate_available_moves]
 # @param $1: Player # to evaluate available moves for (1 or 2)
-# @return: The array element index that represents the best possible move.
+# @return: A string formatted as "$best_move=$best_move_result"
 function evaluate_available_moves {
     local player_num=$1
     local level_num=$2
+    
     local available_moves=( )
     local results_filename="available_moves_$$"
-    printf "[evaluate_available_moves_$$] called! player_num=$player_num, level_num=$level_num\n"
+    local return_val
 
     # Copy the appropriate list of local moves into a local array
     if [ "$player_num" = "1" ]; then
@@ -473,6 +501,8 @@ function evaluate_available_moves {
     elif [ "$player_num" = "2" ]; then
         available_moves=("${player2_available_moves[@]}")
     fi
+    
+    dprintf "[evaluate_available_moves_$$] called! player_num=$player_num, level_num=$level_num, available_moves=(${available_moves[*]})\n"
 
     # Evaluate each of the available moves using a thread process
     for move in ${available_moves[@]}; do
@@ -482,18 +512,17 @@ function evaluate_available_moves {
     # Wait for all the thread processes to finish
     wait
 
-    # Now iterate over the contents of the results file. Determine the value
-    # of the best move, and the corresponding position
-    local best_move=${available_moves[0]}
+    # Now iterate over the contents of the results file. Set the return value
+    # as $best_move=$best_move_value
+    return_val=${available_moves[0]}
     local best_move_value=-64
     for result in `cat $results_filename`; do
-        printf "[evaluate_available_moves_$$] level_num=$level_num, result=$result, best_move=$best_move, best_move_value=$best_move_value\n"
+        dprintf "[evaluate_available_moves_$$] level_num=$level_num, result: $result, best_move_value=$best_move_value\n"
         while IFS='=' read -ra result_tokens; do
-            local this_move=${result_tokens[0]}
             local this_move_value=${result_tokens[1]}
             if (( this_move_value > best_move_value )); then
-                best_move=$this_move
                 best_move_value=$this_move_value
+                return_value=$result
             fi
         done <<< "$result"
     done
@@ -502,8 +531,8 @@ function evaluate_available_moves {
     rm $results_filename
 
     # Return!
-    printf "[evaluate_available_moves_$$] best_move=$best_move, best_move_value=$best_move_value\n"
-    return $best_move
+    dprintf "[evaluate_available_moves_$$] returning: $return_val\n"
+    echo $return_val
 }
 
 # [array_contains]
@@ -554,6 +583,19 @@ function array_remove {
         done
     fi
 }
+
+# [dprintf]
+# @description: Debug printf to stderr
+# @param $1: String to output to stderr
+# @param $2: Any arguments that need to be converted
+# @return: Nothing, assume success.
+function dprintf {
+    local string=$1
+    shift
+    local args=$@
+    >&2 printf "$string" ${args[*]}
+}
+
 
 # Start!
 main $@
