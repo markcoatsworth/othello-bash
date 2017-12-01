@@ -88,20 +88,20 @@ function main() {
             player2_move_start_time=`date +%s`
 
             # Strategy 1: Choose a move at random
-            random_move_index=$(( RANDOM % ${#player2_available_moves} ))
-            player2_move=${player2_available_moves[$random_move_index]}
+            #random_move_index=$(( RANDOM % ${#player2_available_moves} ))
+            #player2_move=${player2_available_moves[$random_move_index]}
 
             # Strategy 2: Evaluate the best move using recursive minmax tree  
             # to depth $minmax_depth. 
             # Result is a '=' delimited string: move_pos=move_value
-            #minmax_depth=3
-            #player2_minmax_move_result=$(evaluate_available_moves 2 $minmax_depth)
-            #IFS='=' read -a result_tokens <<< "$player2_minmax_move_result"
-            #player2_move=$(( ${result_tokens[0]} ))
+            minmax_depth=3
+            player2_minmax_move_result=$(evaluate_available_moves 2 $minmax_depth)
+            IFS='=' read -a result_tokens <<< "$player2_minmax_move_result"
+            player2_move_pos=$(( ${result_tokens[0]} ))
 
             # Play the best move determined by our chosen strategy
-            player2_move_row=$(( ( player2_move / 8 ) + 1 ))
-            player2_move_col=$(( ( player2_move % 8 ) + 1 ))
+            player2_move_row=$(( ( player2_move_pos / 8 ) + 1 ))
+            player2_move_col=$(( ( player2_move_pos % 8 ) + 1 ))
             board_play_move $player2_move_row $player2_move_col 2
             printf "Player 2 played at row $player2_move_row, col $player2_move_col (array pos $player2_move).\n"
 
@@ -177,7 +177,7 @@ function thread {
     # Play the suggested move
     board_play_move $suggested_move_row $suggested_move_col $player_num
     
-    # Recursively determine the score! 
+    # Recursively determine the score using evaluate_available_moves! 
     # Right now, score is difference in number of pieces between the current 
     #   player ($player_num) vs. opponent
     # TODO: Find a better way to calculate score. Weighted board diffs?
@@ -228,7 +228,6 @@ function board_get_pos {
     fi
     
     # Return as expression
-    #dprintf "[board_get_pos] row_pos=$row_pos, col_pos=$col_pos, return_val=$return_val\n"
     echo $return_val
 }
 
@@ -332,7 +331,6 @@ function board_play_move {
         # Move was not legal, bail out here
         return 1
     fi
-    
 
     # Now we need to flip opponent pieces that were just surrounded 
     # Iterate over adjacent positions to the new move
@@ -387,14 +385,13 @@ function board_is_legal_move {
     local value=$2
     local return_val=1 # Assume not legal until proven otherwise
 
-    # Get a array of surrounding moves, max 8 elements
+    # Get an array of surrounding moves
     local adjacent_positions=( 
         $(( array_pos - 9 )) $(( array_pos - 8 )) $(( array_pos - 7 ))
         $(( array_pos - 1 ))                      $(( array_pos + 1 ))
         $(( array_pos + 7 )) $(( array_pos + 8 )) $(( array_pos + 9 ))
     )
-    #dprintf "[board_is_legal_move] array_pos=$array_pos, value=$value, adjacent_positions=(${adjacent_positions[*]})\n"
-
+    
     # Iterate over adjacent positions to the requested position
     for adj_pos in ${adjacent_positions[@]}; do
 
@@ -408,8 +405,7 @@ function board_is_legal_move {
             array_pos_col=$(( ( array_pos % 8 ) + 1 ))
             adj_pos_row=$(( ( adj_pos / 8 ) + 1 ))
             adj_pos_col=$(( ( adj_pos % 8 ) + 1 ))
-            #dprintf "[board_is_legal_move] array_pos=$array_pos ($array_pos_row, $array_pos_col), value=$value, found an adjacent opponent at adj_pos_row=$adj_pos_row, adj_pos_col=$adj_pos_col\n"
-
+            
             # Now traverse the matrix in the direction of the opponent
             # piece we just found. Continue until:
             # 1. Hit a 0 (empty): move is not valid.
@@ -420,7 +416,6 @@ function board_is_legal_move {
             scan_row=$(( array_pos_row + row_diff ))
             scan_col=$(( array_pos_col + col_diff ))
 
-            #dprintf "[board_is_legal_move] array_pos=$array_pos ($array_pos_row, $array_pos_col), scan_row=$scan_row, scan_col=$scan_col, row_diff=$row_diff, col_diff=$col_diff\n"
             while (( scan_row >= 1 && scan_row <= 8 && scan_col >= 1 && scan_col <= 8 )); do
                 scan_val=$(board_get_pos $scan_row $scan_col)
                 if [ "$scan_val" -eq "0" ]; then
@@ -473,7 +468,7 @@ function set_available_moves {
 # [evaluate_available_moves]
 # @param $1: Player # to evaluate available moves for (1 or 2)
 # @param $2: This move's current level in the minmax tree.
-# @return: A string formatted as "$best_move=$best_move_result"
+# @return: A string formatted as "$best_move_pos=$best_move_result"
 function evaluate_available_moves {
     local player_num=$1
     local level_num=$2
@@ -489,9 +484,7 @@ function evaluate_available_moves {
         available_moves=("${player2_available_moves[@]}")
     fi
     
-    #dprintf "[evaluate_available_moves_$$] called! player_num=$player_num, level_num=$level_num, available_moves=(${available_moves[*]})\n"
-
-    # Recursive, evaluate each of the available moves using a thread process
+    # Recursively evaluate each of the available moves using a thread process
     for move in ${available_moves[@]}; do
         ./othello-bash.sh "thread" $player_num $move $results_filename $(( level_num - 1 )) ${board[*]} &
     done
@@ -562,8 +555,7 @@ function array_remove {
     local new_array=( )
 
     # Bash sucks at removing elements from arrays + re-indexing the other
-    # elements. This is a long-winded hack, can probably find a better way
-    # to do this.
+    # elements. Is there a better way to do this?
     if [ "$array_name" = "player1_pieces" ]; then
         for array_val in ${player1_pieces[@]}; do
             if (( array_val != match )); then new_array+=($array_val); fi
