@@ -48,8 +48,8 @@ function main() {
     # Setup the initial game state
     set_available_moves 1
     set_available_moves 2
-    game_state="player1_turn"
-    minmax_depth=3
+    game_state="player1_turn" # Set this to "player2_turn" for computer start.
+    minmax_depth=3 # Set this to 1 on laptops and slower desktops!!
 
 
     # Main process loop!
