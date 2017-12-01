@@ -88,16 +88,16 @@ function main() {
             player2_move_start_time=`date +%s`
 
             # Strategy 1: Choose a move at random
-            #random_move_index=$(( RANDOM % ${#player2_available_moves} ))
-            #player2_move=${player2_available_moves[$random_move_index]}
+            random_move_index=$(( RANDOM % ${#player2_available_moves} ))
+            player2_move=${player2_available_moves[$random_move_index]}
 
             # Strategy 2: Evaluate the best move using recursive minmax tree  
             # to depth $minmax_depth. 
             # Result is a '=' delimited string: move_pos=move_value
-            minmax_depth=3
-            player2_minmax_move_result=$(evaluate_available_moves 2 $minmax_depth)
-            IFS='=' read -a result_tokens <<< "$player2_minmax_move_result"
-            player2_move=$(( ${result_tokens[0]} ))
+            #minmax_depth=3
+            #player2_minmax_move_result=$(evaluate_available_moves 2 $minmax_depth)
+            #IFS='=' read -a result_tokens <<< "$player2_minmax_move_result"
+            #player2_move=$(( ${result_tokens[0]} ))
 
             # Play the best move determined by our chosen strategy
             player2_move_row=$(( ( player2_move / 8 ) + 1 ))
@@ -379,54 +379,61 @@ function board_play_move {
 }
 
 # [board_is_legal_move]
-# @param $1: Row position of the board space to verify (1 to 8)
-# @param $2: Col position of the board space to verify (1 to 8)
-# @param $3: Value to verify is legal.
+# @param $1: Board array position of the space to verify (0 to 63)
+# @param $2: Value to verify is legal.
 # @return: 0 if the move is legal, 1 if not.
 function board_is_legal_move {
-    local row_pos=$1
-    local col_pos=$2
-    local value=$3
+    local array_pos=$1
+    local value=$2
     local return_val=1 # Assume not legal until proven otherwise
 
+    # Get a array of surrounding moves, max 8 elements
+    local adjacent_positions=( 
+        $(( array_pos - 9 )) $(( array_pos - 8 )) $(( array_pos - 7 ))
+        $(( array_pos - 1 ))                      $(( array_pos + 1 ))
+        $(( array_pos + 7 )) $(( array_pos + 8 )) $(( array_pos + 9 ))
+    )
+    #dprintf "[board_is_legal_move] array_pos=$array_pos, value=$value, adjacent_positions=(${adjacent_positions[*]})\n"
+
     # Iterate over adjacent positions to the requested position
-    is_adjacent_opponent=0
-    for row in `seq $(( row_pos-1 )) $(( row_pos+1 ))`; do
-        for col in `seq $(( col_pos-1 )) $(( col_pos+1 ))`; do
+    for adj_pos in ${adjacent_positions[@]}; do
 
-            # Don't even bother to check if this is a valid position on the 
-            # board. If it's not, bash will return "0" which we don't care 
-            # about.
-            this_pos_value=$(board_get_pos $row $col)
+        adj_pos_value=${board[$adj_pos]}
 
-            # Check if this position is adjacent to an opponent. If so, their
-            # position values (1, 2) will add up to 3.
-            if (( value + this_pos_value == 3 )); then
+        # Check if this position is adjacent to an opponent. If so, their
+        # position values (1, 2) will add up to 3.
+        if (( value + adj_pos_value == 3 )); then
 
-                # Now traverse the matrix in the direction of the opponent
-                # piece we just found. Continue until:
-                # 1. Hit a 0 (empty): move is not valid.
-                # 2. Hit the edge of the board: move is not valid
-                # 3. Hit one of our own pieces: move is valid
-                row_diff=$(( row - row_pos ))
-                col_diff=$(( col - col_pos ))
-                scan_row=$(( row + row_diff ))
-                scan_col=$(( col + col_diff ))
+            array_pos_row=$(( ( array_pos / 8 ) + 1 ))
+            array_pos_col=$(( ( array_pos % 8 ) + 1 ))
+            adj_pos_row=$(( ( adj_pos / 8 ) + 1 ))
+            adj_pos_col=$(( ( adj_pos % 8 ) + 1 ))
+            #dprintf "[board_is_legal_move] array_pos=$array_pos ($array_pos_row, $array_pos_col), value=$value, found an adjacent opponent at adj_pos_row=$adj_pos_row, adj_pos_col=$adj_pos_col\n"
 
-                while (( scan_row >= 1 && scan_row <= 8 && scan_col >= 1 && scan_col <= 8 )); do
-                    scan_val=$(board_get_pos $scan_row $scan_col)
-                    if [ "$scan_val" -eq "0" ]; then
-                        break
-                    elif [ "$scan_val" -eq "$value" ]; then
-                        return_val=0
-                        break
-                    fi
-                    scan_row=$(( scan_row + row_diff ))
-                    scan_col=$(( scan_col + col_diff ))
-                 done
+            # Now traverse the matrix in the direction of the opponent
+            # piece we just found. Continue until:
+            # 1. Hit a 0 (empty): move is not valid.
+            # 2. Hit the edge of the board: move is not valid
+            # 3. Hit one of our own pieces: move is valid
+            row_diff=$(( adj_pos_row - array_pos_row ))
+            col_diff=$(( adj_pos_col - array_pos_col ))
+            scan_row=$(( array_pos_row + row_diff ))
+            scan_col=$(( array_pos_col + col_diff ))
 
-            fi
-        done
+            #dprintf "[board_is_legal_move] array_pos=$array_pos ($array_pos_row, $array_pos_col), scan_row=$scan_row, scan_col=$scan_col, row_diff=$row_diff, col_diff=$col_diff\n"
+            while (( scan_row >= 1 && scan_row <= 8 && scan_col >= 1 && scan_col <= 8 )); do
+                scan_val=$(board_get_pos $scan_row $scan_col)
+                if [ "$scan_val" -eq "0" ]; then
+                    break
+                elif [ "$scan_val" -eq "$value" ]; then
+                    return_val=0
+                    break
+                fi
+                scan_row=$(( scan_row + row_diff ))
+                scan_col=$(( scan_col + col_diff ))
+            done
+
+        fi
     done
 
     # Return as value
@@ -446,9 +453,7 @@ function set_available_moves {
     for pos in `seq 0 63`; do
         pos_val=${board[$pos]}
         if [ "$pos_val" = "0" ]; then
-            move_row=$(( ( pos / 8 ) + 1 ))
-            move_col=$(( ( pos % 8 ) + 1 ))
-            board_is_legal_move $move_row $move_col $player_num
+            board_is_legal_move $pos $player_num
             is_legal=$?
             # If this is a legal move, add it!
             if (( is_legal == 0 )); then
@@ -486,7 +491,7 @@ function evaluate_available_moves {
     
     #dprintf "[evaluate_available_moves_$$] called! player_num=$player_num, level_num=$level_num, available_moves=(${available_moves[*]})\n"
 
-    # Evaluate each of the available moves using a thread process
+    # Recursive, evaluate each of the available moves using a thread process
     for move in ${available_moves[@]}; do
         ./othello-bash.sh "thread" $player_num $move $results_filename $(( level_num - 1 )) ${board[*]} &
     done
@@ -494,7 +499,7 @@ function evaluate_available_moves {
     # Wait for all the thread processes to finish
     wait
 
-    # Determine if we are looking for a min-value or a max-value
+    # Set if we are looking for a min-value or a max-value
     local best_move_value
     if (( player_num % 2 == 0 )); then
         minmax_val="max"
@@ -561,24 +566,16 @@ function array_remove {
     # to do this.
     if [ "$array_name" = "player1_pieces" ]; then
         for array_val in ${player1_pieces[@]}; do
-            if (( array_val != match )); then
-                new_array+=($array_val)
-            fi
+            if (( array_val != match )); then new_array+=($array_val); fi
         done
         player1_pieces=( )
-       for i in ${new_array[@]}; do 
-            player1_pieces+=($i) 
-        done;
+        for i in ${new_array[@]}; do player1_pieces+=($i); done
     elif [ "$array_name" = "player2_pieces" ]; then
         for array_val in ${player2_pieces[@]}; do 
-            if (( array_val != match )); then
-                new_array+=($array_val)
-            fi
+            if (( array_val != match )); then new_array+=($array_val); fi
         done
         player2_pieces=( )
-        for i in ${new_array[@]}; do 
-            player2_pieces+=($i) 
-        done
+        for i in ${new_array[@]}; do player2_pieces+=($i); done
     fi
 }
 
