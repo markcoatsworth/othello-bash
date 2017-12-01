@@ -11,6 +11,16 @@ board=(
     0 0 0 0 0 0 0 0 
     0 0 0 0 0 0 0 0
 )
+weighted_board=(
+    120 -20 20  5   5   20  -20 120
+    -20 -40 -5  -5  -5  -5  -40 -20
+    20  -5  15  3   3   15  -5  20
+    5   -5  3   3   3   3   -5  5
+    5   -5  3   3   3   3   -5  5
+    20  -5  15  3   3   15  -5  20
+    -20 -40 -5  -5  -5  -5  -40 -20
+    120 -20 20  5   5   20  -20 120
+)
 player1_pieces=( 27 36 )
 player2_pieces=( 28 35 )
 player1_available_moves=( ) # set later using set_available_moves
@@ -25,7 +35,7 @@ function main() {
     process_type="process"
     if [ ! -z $1 ]; then process_type=$1; fi
 
-    # If this is a process thread, call the handler function, which will deal
+    # If process thread, call the thread handler function which will deal
     # with the rest of the command line arguments. Once that is complete, exit.
     if [ "$process_type" = "thread" ]; then
         thread $@
@@ -39,6 +49,7 @@ function main() {
     set_available_moves 1
     set_available_moves 2
     game_state="player1_turn"
+    minmax_depth=3
 
 
     # Main process loop!
@@ -94,7 +105,6 @@ function main() {
             # Strategy 2: Evaluate the best move using recursive minmax tree  
             # to depth $minmax_depth. 
             # Result is a '=' delimited string: move_pos=move_value
-            minmax_depth=3
             player2_minmax_move_result=$(evaluate_available_moves 2 $minmax_depth)
             IFS='=' read -a result_tokens <<< "$player2_minmax_move_result"
             player2_move_pos=$(( ${result_tokens[0]} ))
@@ -103,7 +113,7 @@ function main() {
             player2_move_row=$(( ( player2_move_pos / 8 ) + 1 ))
             player2_move_col=$(( ( player2_move_pos % 8 ) + 1 ))
             board_play_move $player2_move_row $player2_move_col 2
-            printf "Player 2 played at row $player2_move_row, col $player2_move_col (array pos $player2_move).\n"
+            printf "Player 2 played at row $player2_move_row, col $player2_move_col (array pos $player2_move_pos).\n"
 
             # Show some timing information
             player2_move_end_time=`date +%s`
@@ -145,7 +155,7 @@ function main() {
 # @description: Main control loop for "thread" processes, which are not
 #   technically threads but are being used in a similar way. Runs a minmax
 #   search by calling evaluate_available_moves, which recursively calls up more
-#   "thread" subprocesses.
+#   thread subprocesses.
 function thread {
     local player_num=$2
     local suggested_move=$3
@@ -177,21 +187,30 @@ function thread {
     # Play the suggested move
     board_play_move $suggested_move_row $suggested_move_col $player_num
     
-    # Recursively determine the score using evaluate_available_moves! 
+    # Recursively determine the score using evaluate_available_moves!
     # Right now, score is difference in number of pieces between the current 
     #   player ($player_num) vs. opponent
     # TODO: Find a better way to calculate score. Weighted board diffs?
+    # TODO: Better way to return these values than a disk write?
     if (( level_num >= 1 )); then
         set_available_moves $opponent_num
         best_move_result=$(evaluate_available_moves $opponent_num $level_num)
         IFS='=' read -a result_tokens <<< "$best_move_result"
         move_result=$(( ${result_tokens[1]} ))
     else
-        # At the top level, we're always looking for the best result for 
+        # As we traverse up, we're always looking for the best result for 
         # player2 (computer).
-        move_result=$(( ${#player2_pieces[@]} - ${#player1_pieces[@]} ))
+        
+        # Scoring strategy 1: difference in player pieces on the board
+        # move_result=$(( ${#player2_pieces[@]} - ${#player1_pieces[@]} ))
+
+        # Scoring strategy 2: weight of suggested move on the board
+        # move_result=${weighted_board[$suggested_move]}
+
+        # Scoring strategy 3: strategy 1 + strategy 2
+        move_result=$(( ${#player2_pieces[@]} - ${#player1_pieces[@]} + ${weighted_board[$suggested_move]} ))
     fi
-    #printf "[thread_$$] after move, player1_pieces=(${player1_pieces[*]}), player2_pieces=(${player2_pieces[*]}), move_diff=$move_diff\n"
+    #dprintf "[thread_$$] after move, player1_pieces=(${player1_pieces[*]}), player2_pieces=(${player2_pieces[*]}), move_result=$move_result\n"
 
     # Output results
     echo $suggested_move=$move_result >> $results_filename
@@ -496,10 +515,10 @@ function evaluate_available_moves {
     local best_move_value
     if (( player_num % 2 == 0 )); then
         minmax_val="max"
-        best_move_value=-64
+        best_move_value=-10000
     else
         minmax_val="min"
-        best_move_value=64
+        best_move_value=10000
     fi
 
     # Now iterate over the contents of the results file. This is where the min-max
@@ -508,7 +527,7 @@ function evaluate_available_moves {
     # Set the return value as $best_move=$best_move_value
     local return_val
     for result in `cat $results_filename`; do
-        #dprintf "[evaluate_available_moves_$$] level_num=$level_num, result: $result, best_move_value=$best_move_value, return_val=$return_val\n"
+        
         while IFS='=' read -ra result_tokens; do
             local this_move_value=${result_tokens[1]}
             if [ "$minmax_val" = "max" ]; then
@@ -523,6 +542,7 @@ function evaluate_available_moves {
                 fi
             fi
         done <<< "$result"
+        #dprintf "[evaluate_available_moves_$$] level_num=$level_num, result: $result, best_move_value=$best_move_value, return_val=$return_val\n"
     done
 
     # Delete the results file
