@@ -21,8 +21,8 @@ weighted_board=(
     -20 -40 -5  -5  -5  -5  -40 -20
     120 -20 20  5   5   20  -20 120
 )
-player1_pieces=( 27 36 )
-player2_pieces=( 28 35 )
+player1_pieces=( ) # set later using set_player_pieces
+player2_pieces=( ) # set later using set_player_pieces
 player1_available_moves=( ) # set later using set_available_moves
 player2_available_moves=( ) # set later using set_available_moves
 
@@ -46,9 +46,10 @@ function main() {
     rm -rf available_moves*
 
     # Setup the initial game state
+    set_player_pieces  
     set_available_moves 1
     set_available_moves 2
-    game_state="player1_turn" # Set this to "player2_turn" for computer start.
+    game_state="player1_turn" # "player1_turn" for human start, "player2_turn" for computer start.
     minmax_depth=3 # Set this to 1 on laptops and slower desktops!!
 
 
@@ -75,6 +76,7 @@ function main() {
             board_play_move $player1_row $player1_col 1
             if [ "$?" -ne "0" ]; then
                 printf "\n*** Invalid move! Try again. ***\n\n"
+                sleep 1
             else
                 # Move was successful. Evaluate player 2 available moves. 
                 # If they have none, check if game is over. 
@@ -169,8 +171,6 @@ function thread {
     local suggested_move_row=$(( ( suggested_move / 8 ) + 1 ))
     local suggested_move_col=$(( ( suggested_move % 8 ) + 1 ))
 
-    #dprintf "\n[thread_$$] player_num=$player_num, opponent_num=$opponent_num, suggested_move=$suggested_move ($suggested_move_row, $suggested_move_col), results_filename=$results_filename, level_num=$level_num\n"
-
     # Set the state of the game (board, player1_pieces, player2_pieces, current
     # player available moves) based on remaining command-line arguments
     player1_pieces=( )
@@ -190,7 +190,6 @@ function thread {
     # Recursively determine the score using evaluate_available_moves!
     # Right now, score is difference in number of pieces between the current 
     #   player ($player_num) vs. opponent
-    # TODO: Find a better way to calculate score. Weighted board diffs?
     # TODO: Better way to return these values than a disk write?
     if (( level_num >= 1 )); then
         set_available_moves $opponent_num
@@ -204,14 +203,18 @@ function thread {
         # Scoring strategy 1: difference in player pieces on the board
         # move_result=$(( ${#player2_pieces[@]} - ${#player1_pieces[@]} ))
 
-        # Scoring strategy 2: weight of suggested move on the board
-        # move_result=${weighted_board[$suggested_move]}
+        # Scoring strategy 2: difference in weighted player pieces
+        move_result=0
+        for pos in ${player2_pieces[@]}; do
+            move_result=$(( move_result + weighted_board[pos] ));
+        done
+        for pos in ${player1_pieces[@]}; do
+            move_result=$(( move_result - weighted_board[pos] ));
+        done
 
-        # Scoring strategy 3: strategy 1 + strategy 2
-        move_result=$(( ${#player2_pieces[@]} - ${#player1_pieces[@]} + ${weighted_board[$suggested_move]} ))
     fi
-    #dprintf "[thread_$$] after move, player1_pieces=(${player1_pieces[*]}), player2_pieces=(${player2_pieces[*]}), move_result=$move_result\n"
-
+    #dprintf "[thread_$$] player_num=$player_num, level_num=$level_num, opponent_num=$opponent_num, suggested_move=$suggested_move ($suggested_move_row, $suggested_move_col), results_filename=$results_filename, move_result=$move_result\n"
+    
     # Output results
     echo $suggested_move=$move_result >> $results_filename
 }
@@ -455,7 +458,7 @@ function board_is_legal_move {
 }
 
 # [set_available_moves]
-# @param $1: Player # to get available moves for (1 or 2)
+# @param $1: Player # to set available moves for (1 or 2)
 # @return: Nothing. Set one of the global variables, player1_available_moves or
 #   player2_available_moves.
 function set_available_moves {
@@ -484,6 +487,18 @@ function set_available_moves {
     fi
 }
 
+# [set_player_pieces]
+# @return: Nothing. Set both global variables, player1_pieces and player2_pieces.
+function set_player_pieces {
+    player1_pieces=( )
+    player2_pieces=( )
+    for index in `seq 0 63`; do
+        if [ "${board[$index]}" = "1" ]; then player1_pieces+=($index); fi
+        if [ "${board[$index]}" = "2" ]; then player2_pieces+=($index); fi
+        shift
+    done
+}
+
 # [evaluate_available_moves]
 # @param $1: Player # to evaluate available moves for (1 or 2)
 # @param $2: This move's current level in the minmax tree.
@@ -491,6 +506,7 @@ function set_available_moves {
 function evaluate_available_moves {
     local player_num=$1
     local level_num=$2
+    
     local available_moves=( )
     local minmax_val
     local results_filename="available_moves_$$"
@@ -503,6 +519,7 @@ function evaluate_available_moves {
         available_moves=("${player2_available_moves[@]}")
     fi
     
+    #3dprintf "\n[evaluate_available_moves_$$] player_num=$1, level_num=$2, p$player_num available_moves=(${available_moves[*]})\n"
     # Recursively evaluate each of the available moves using a thread process
     for move in ${available_moves[@]}; do
         ./othello-bash.sh "thread" $player_num $move $results_filename $(( level_num - 1 )) ${board[*]} &
@@ -527,7 +544,6 @@ function evaluate_available_moves {
     # Set the return value as $best_move=$best_move_value
     local return_val
     for result in `cat $results_filename`; do
-        
         while IFS='=' read -ra result_tokens; do
             local this_move_value=${result_tokens[1]}
             if [ "$minmax_val" = "max" ]; then
@@ -542,7 +558,7 @@ function evaluate_available_moves {
                 fi
             fi
         done <<< "$result"
-        #dprintf "[evaluate_available_moves_$$] level_num=$level_num, result: $result, best_move_value=$best_move_value, return_val=$return_val\n"
+        #dprintf "[evaluate_available_moves_$$] player_num=$player_num, level_num=$level_num, minmax_val=$minmax_val, result: $result, best_move_value=$best_move_value, return_val=$return_val\n"
     done
 
     # Delete the results file
